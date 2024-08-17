@@ -1,0 +1,1 @@
+python inpainting.py -i rock -s 140 --step_size 50

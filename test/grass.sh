@@ -1,0 +1,1 @@
+python inpainting.py -i grass -s 0 --step_size 100
