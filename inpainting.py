@@ -10,7 +10,7 @@ def parse_args():
     ap.add_argument("-s", "--starting_frame", type=int, default=140)
     ap.add_argument("--step_size", type=int, default=50)
     ap.add_argument("-i", "--image", type=str, default="rock",
-                    choices=['grass', 'rock'],
+                    choices=['grass', 'rock', 'tree', 'rock2'],
                     help="frames to inpaint")
     ap.add_argument("-a", "--method", type=str, default="telea",
         choices=["telea", "ns"],
@@ -20,7 +20,15 @@ def parse_args():
     
     args = vars(ap.parse_args())
 
-    args['image'] = '20220318_020426_grass' if args['image'] == 'grass' else '20220319_002026_rock'
+    if args['image'] == 'grass':
+        args['image'] = '20220318_020426_grass' 
+    elif args['image'] == 'rock':
+        args['image'] = '20220319_002026_rock'
+    elif args['image'] == 'tree':
+        args['image'] =  '20220410_032506_tree'
+    elif args['image'] == 'rock2':
+        args['image'] = '20220319_002203_rock2'
+
     args['method'] = cv.INPAINT_TELEA if args['method'] == 'telea' else cv.INPAINT_NS
 
     return args
@@ -81,7 +89,7 @@ def blend_frames(next_frame, prev_frame, mask):
     # find the upper left corner of the mask
     h, w = mask.shape
     min_x, min_y = h, w
-    # Find the highest and leftmost point in the mask
+    # Find the highest and leftmost point in the mask to create the double blended frame
     for i in range(h):
         for j in range(w):
             if mask[i, j] != 0:
@@ -89,12 +97,17 @@ def blend_frames(next_frame, prev_frame, mask):
                     min_x = i
                 if j < min_y:
                     min_y = j
-    cv.imshow('prev frame pre', prev_frame)
-    prev_frame[min_x:, min_y:] = 0
-    cv.imshow('prev frame post', prev_frame)
+    
+    prev_frame_mask = prev_frame.copy()
+    prev_frame_mask[min_x:, min_y:] = 0
+    
+    next_frame_double_blended = next_frame.copy()
+    next_frame_double_blended[prev_frame_mask != 0] = prev_frame_mask[prev_frame_mask != 0]
 
+    # Frame blending using entirely the previous frame
     next_frame[prev_frame != 0] = prev_frame[prev_frame != 0]
-    return next_frame
+
+    return next_frame, next_frame_double_blended
 
 def compute_magnitude(flow):
     magnitude, _ = cv.cartToPolar(flow[..., 0], flow[..., 1])
@@ -150,15 +163,13 @@ def main():
         prev_frame = cv.imread(frames_files[i])
         next_frame = cv.imread(frames_files[i+1])
         after_motion = cv.imread(frames_files[i+args['step_size']])
-        # cv.imshow('prev frame', prev_frame)
-        # cv.imshow('next frame', next_frame)
-        # cv.imshow('after motion', after_motion)
+        cv.imshow('prev frame', prev_frame)
+        cv.imshow('after motion', after_motion)
 
         flow = compute_optical_flow(prev_frame, next_frame)
         magnitude = compute_magnitude(flow)
 
         warped_frame = warp_frame_sift(prev_frame, after_motion)
-        # cv.imshow('warped frame', warped_frame)
 
         motion_mask = create_motion_mask(magnitude, k=args["scaling_factor"])
         cleaned_motion_mask = clean_mask(motion_mask)
@@ -166,9 +177,10 @@ def main():
         bg_mask = remove_bg(next_frame, fgbg)
         bitwise_mask = cv.bitwise_and(cleaned_motion_mask, bg_mask)
 
-        inpainted_frame = blend_frames(after_motion, warped_frame, cleaned_motion_mask)
-        cv.imshow('inpainted frame', inpainted_frame)
+        inpainted_frame, inpainted_frame_double = blend_frames(after_motion, warped_frame, cleaned_motion_mask)
 
+        cv.imshow('inpainted frame', inpainted_frame)
+        cv.imshow('inpainted frame double', inpainted_frame_double)
         cv.imshow('clean motion mask', cleaned_motion_mask)
         # cv.imshow('bg mask', bg_mask)
         # cv.imshow('bitwise mask', bitwise_mask)
