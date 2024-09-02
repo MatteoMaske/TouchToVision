@@ -4,9 +4,9 @@ import numpy as np
 import os
 
 # Specify the relative path to the images
-image_folder = os.path.join('..', '20220319_002026_rock')
+image_folder = os.path.join('..', '20220410_032506_tree')
 image1_path = os.path.join(image_folder, 'video_frame/0000000000.jpg')
-image2_path = os.path.join(image_folder, 'video_frame/0000000218.jpg')
+image2_path = os.path.join(image_folder, 'video_frame/0000000216.jpg')
 
 # Load the two images
 img1 = cv2.imread(image1_path, cv2.IMREAD_GRAYSCALE)
@@ -24,7 +24,7 @@ matches = bf.knnMatch(des1, des2, k=2)
 # 3. Apply ratio test to keep good matches (Lowe's ratio test)
 good_matches = []
 for m, n in matches:
-    if m.distance < 1.75 * n.distance:
+    if m.distance < 0.75 * n.distance:
         good_matches.append(m)
 
 # 4. Extract the matched keypoints' locations
@@ -37,6 +37,7 @@ F, mask = cv2.findFundamentalMat(pts1, pts2, cv2.FM_RANSAC)
 # We select only inlier points
 pts1 = pts1[mask.ravel() == 1]
 pts2 = pts2[mask.ravel() == 1]
+
 
 # 6. Find Homography using the inlier points
 H, status = cv2.findHomography(pts1, pts2, cv2.RANSAC)
@@ -51,13 +52,13 @@ img_inlier_matches = cv2.drawMatches(img1, kp1, img2, kp2, [good_matches[i] for 
 # 9. Stereo Matching to compute the disparity map
 # StereoSGBM parameters
 min_disp = 0
-num_disp = 16 * 2  # Must be divisible by 16
-block_size = 11  # The size of the block window. Must be odd
+num_disp = 16 * 3  # Must be divisible by 16
+block_size = 5  # The size of the block window. Must be odd
 P1 = 8 * 3 * block_size ** 2
 P2 = 32 * 3 * block_size ** 2
 disp12_max_diff = 1
 uniqueness_ratio = 15
-speckle_window_size = 25
+speckle_window_size = 20
 speckle_range = 2
 pre_filter_cap = 63
 
