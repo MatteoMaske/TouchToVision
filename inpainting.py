@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 def parse_args():
 	
     ap = argparse.ArgumentParser()
-    ap.add_argument("-s", "--starting_frame", type=int, default=140)
-    ap.add_argument("--step_size", type=int, default=50)
+    # ap.add_argument("-s", "--starting_frame", type=int, default=140)
+    ap.add_argument("--step_size", type=int, default=20)
     ap.add_argument("-i", "--image", type=str, default="rock",
                     choices=['grass', 'rock', 'tree', 'rock2'],
                     help="frames to inpaint")
@@ -33,6 +33,101 @@ def parse_args():
 
     return args
 
+def find_best_step_parameters(frames_files_rgb, args):
+    debug = False
+    prev_frame = cv.imread(frames_files_rgb[0])
+    max_magnitude, best_step_size = 0, 0
+
+    for i in range(args['step_size'], 100, args['step_size']):
+        next_frame = cv.imread(frames_files_rgb[i])
+        H = compute_homography(prev_frame, next_frame)
+        if H is None:
+            continue
+        tx, ty = H[0, 2], H[1, 2]
+        magnitude = np.sqrt(tx**2 + ty**2)
+        if magnitude > max_magnitude:
+            max_magnitude = magnitude
+            best_step_size = i
+
+        # Just for debugging purposes
+        if debug:
+            warped_frame = warp_frame_sift(prev_frame, next_frame, H)
+            cv.arrowedLine(warped_frame, (256,256) , (int(tx)+256, int(ty)+256), (0, 255, 0), 1)
+            cv.putText(warped_frame, f"tx:{tx:.2f}, ty:{ty:.2f}, mag:{magnitude:.2f}, frame:{i}", (0, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv.imshow('warped frame', warped_frame)
+            if cv.waitKey(0) & 0xFF == ord('q'):
+                break
+
+    print(f"Best step size: {best_step_size}, magnitude: {max_magnitude}")
+    
+
+    max_magnitude=0
+    best_start=0
+    for i in range(0, len(frames_files_rgb)-best_step_size, best_step_size):
+        prev_frame = cv.imread(frames_files_rgb[i])
+        next_frame = cv.imread(frames_files_rgb[i+best_step_size])
+        H = compute_homography(prev_frame, next_frame)
+        if H is None:
+            continue
+        tx, ty = H[0, 2], H[1, 2]
+        magnitude = np.sqrt(tx**2 + ty**2)
+        if magnitude > max_magnitude:
+            max_magnitude = magnitude
+            best_start = i
+            
+    print(f"Current best start: {best_start}, magnitude: {max_magnitude}")
+
+    # best settings found
+    prev_frame = cv.imread(frames_files_rgb[best_start])
+    next_frame = cv.imread(frames_files_rgb[best_start+best_step_size])
+    warped_frame = warp_frame_sift(prev_frame, next_frame)
+    cv.arrowedLine(warped_frame, (256,256) , (int(tx)+256, int(ty)+256), (0, 255, 0), 1)
+    cv.putText(warped_frame, f"tx:{tx:.2f}, ty:{ty:.2f}, mag:{magnitude:.2f}, frame:{i}", (0, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    cv.imshow('warped frame', warped_frame)
+
+    return best_start, best_step_size
+
+def segment_frame(frame):
+    """
+        Segments the frame to separate the background from the foreground using KNN segmentation
+    """
+
+    # Convert to grayscale
+    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+    # Find Canny edges 
+    _, thresholded = cv.threshold(gray, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
+
+    # # Apply a binary threshold to ensure it's binary (if not already)
+    # _, binary_image = cv.threshold(gray, 128, 255, cv.THRESH_BINARY)
+
+    # Find contours
+    contours, _ = cv.findContours(thresholded, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    # Draw all contours on a copy of the original image for visualization
+    contoured_image = frame.copy()
+    cv.drawContours(contoured_image, contours, -1, (0, 255, 0), 2)  # Draw all contours in green
+
+    # Identify and highlight the largest contour (assuming it's the hand)
+    largest_contour = max(contours, key=cv.contourArea)
+    cv.drawContours(contoured_image, [largest_contour], -1, (255, 0, 0), 2)  # Draw the largest contour in blue
+
+    # Display the images
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.title('Binary Image')
+    plt.imshow(thresholded, cmap='gray')
+    plt.subplot(1, 2, 2)
+    plt.title('Contours on Image')
+    plt.imshow(cv.cvtColor(contoured_image, cv.COLOR_BGR2RGB))
+    plt.show()
+
+    # Save the contoured image for review
+    output_contour_image_path = 'contoured_image.png'
+    cv.imwrite(output_contour_image_path, contoured_image)
+
+    return contoured_image
+
 def compute_optical_flow(prev_frame, next_frame):
     prev_gray = cv.cvtColor(prev_frame, cv.COLOR_BGR2GRAY)
     next_gray = cv.cvtColor(next_frame, cv.COLOR_BGR2GRAY)
@@ -41,6 +136,17 @@ def compute_optical_flow(prev_frame, next_frame):
     return flow
 
 def warp_frame_of(prev_frame, flow):
+    """
+    Warps the previous frame using the optical flow field to align with the current frame
+    Applicable only for subsequent frames
+
+    Args:
+        prev_frame: Previous frame
+        flow: Optical flow field
+    
+    Returns:
+        warped_frame: Warped frame
+    """
     h, w = flow.shape[:2]
     grid_x, grid_y = np.meshgrid(np.arange(w), np.arange(h))
 
@@ -48,7 +154,7 @@ def warp_frame_of(prev_frame, flow):
     warped_frame = cv.remap(prev_frame, flow_map, None, cv.INTER_LINEAR)
     return warped_frame
 
-def warp_frame_sift(prev_frame, current_frame):
+def compute_homography(prev_frame, current_frame):
     # Convert to grayscale
     prev_gray = cv.cvtColor(prev_frame, cv.COLOR_BGR2GRAY)
     current_gray = cv.cvtColor(current_frame, cv.COLOR_BGR2GRAY)
@@ -75,8 +181,21 @@ def warp_frame_sift(prev_frame, current_frame):
     src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
+    # check if we have enough points to compute the homography
+    if len(src_pts) < 4 or len(dst_pts) < 4:
+        print("Not enough points to compute homography")
+        return None
+
     # Find homography matrix
     M, mask = cv.findHomography(src_pts, dst_pts, cv.RANSAC, 5.0)
+
+    return M
+
+def warp_frame_sift(prev_frame, current_frame, M=None):
+    
+    # Compute the homography matrix
+    if not M:
+        M = compute_homography(prev_frame, current_frame)
 
     # Warp the previous frame to align with the current frame
     h, w = current_frame.shape[:2]
@@ -120,7 +239,7 @@ def create_motion_mask(magnitude, k):
 
     # Set threshold to mean + k * std, k is a hyperparameter
     threshold = mean_magnitude + k * std_magnitude
-    print(f"Threshold: {threshold}")
+    # print(f"Threshold: {threshold}")
 
     mask = np.zeros_like(magnitude, dtype=np.uint8)
     mask[magnitude > threshold] = 255
@@ -144,30 +263,38 @@ def show_current_magnitude(magnitude):
     plt.show()
 
 def remove_bg(image, fgbg):
-    foreground_mask = fgbg.apply(image)
+    foreground_mask = fgbg.apply(image, learningRate=0.99)
     return foreground_mask
 
-
-def main():
-    args = parse_args()
+def main(args):
 
     print("Press 'n' to go to the next frame, press 'p' to show the magnitude, press 'q' to quit")
 
-    fgbg = cv.createBackgroundSubtractorMOG2(history=100, detectShadows=False)
+    fgbg = cv.createBackgroundSubtractorMOG2(history=100, varThreshold=16, detectShadows=False)
 
-    frames_dir = os.path.join(args['image'], 'video_frame')
-    frames_files = os.listdir(frames_dir)
-    frames_files = [os.path.join(frames_dir, frame) for frame in frames_files]
+    frames_dir_rgb = os.path.join(args['image'], 'video_frame')
+    frames_files_rgb = os.listdir(frames_dir_rgb)
+    frames_files_rgb = [os.path.join(frames_dir_rgb, frame) for frame in frames_files_rgb]
 
-    for i in range(args['starting_frame'], len(frames_files)-args['step_size']):
-        prev_frame = cv.imread(frames_files[i])
-        next_frame = cv.imread(frames_files[i+1])
-        after_motion = cv.imread(frames_files[i+args['step_size']])
+    frames_dir_touch = os.path.join(args['image'], 'gelsight_frame')
+    frames_files_touch = os.listdir(frames_dir_touch)
+    frames_files_touch = [os.path.join(frames_dir_touch, frame) for frame in frames_files_touch]
+
+    start, step_size = find_best_step_parameters(frames_files_rgb, args)
+
+    for i in range(start, len(frames_files_rgb)):
+        # RGB frames processing ========================================
+
+        prev_frame = cv.imread(frames_files_rgb[i])
+        next_frame = cv.imread(frames_files_rgb[i+1])
+        after_motion = cv.imread(frames_files_rgb[i+step_size])
         cv.imshow('prev frame', prev_frame)
         cv.imshow('after motion', after_motion)
 
         flow = compute_optical_flow(prev_frame, next_frame)
         magnitude = compute_magnitude(flow)
+
+        # seg_frame = segment_frame(prev_frame)
 
         warped_frame = warp_frame_sift(prev_frame, after_motion)
 
@@ -180,17 +307,27 @@ def main():
         inpainted_frame, inpainted_frame_double = blend_frames(after_motion, warped_frame, cleaned_motion_mask)
 
         cv.imshow('inpainted frame', inpainted_frame)
-        cv.imshow('inpainted frame double', inpainted_frame_double)
+        # cv.imshow('inpainted frame double', inpainted_frame_double)
         cv.imshow('clean motion mask', cleaned_motion_mask)
-        # cv.imshow('bg mask', bg_mask)
         # cv.imshow('bitwise mask', bitwise_mask)
 
         # perform inpainting using OpenCV
         image = next_frame
         mask = cleaned_motion_mask
-        output = cv.inpaint(image, mask, args["radius"], args["method"] )
+        output = cv.inpaint(image, mask, args["radius"], args["method"])
 
         # cv.imshow("Output", output)
+
+        # Touch frames processing ========================================
+        frame_touch = cv.imread(frames_files_touch[i])
+        cv.imshow('frame touch', frame_touch)
+        
+        min_pressure = np.inf
+        min_pressure_idx = 0
+        if np.sum(frame_touch) < min_pressure:
+            min_pressure = np.sum(frame_touch)
+            min_pressure_idx = i
+        print(f"Min pressure: {min_pressure}, at frame {min_pressure_idx}")
 
         # press 'n' to go to the next frame, press 'q' to quit
         if cv.waitKey(0) & 0xFF == ord('q'):
@@ -206,4 +343,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args)
