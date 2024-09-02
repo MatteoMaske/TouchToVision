@@ -4,6 +4,8 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
+MAX_MAGNIUDE = 100
+
 def parse_args():
 	
     ap = argparse.ArgumentParser()
@@ -71,7 +73,7 @@ def find_best_step_parameters(frames_files_rgb, args):
             continue
         tx, ty = H[0, 2], H[1, 2]
         magnitude = np.sqrt(tx**2 + ty**2)
-        if magnitude > max_magnitude:
+        if magnitude > max_magnitude and magnitude < MAX_MAGNIUDE:
             max_magnitude = magnitude
             best_start = i
             
