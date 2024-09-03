@@ -102,11 +102,11 @@ def find_max_pressure(frames_files_touch, start_frame=0, step_size=50):
     """
     Find the frame with the maximum pressure using the sum of the pixel values
     """
-    rest_frame_touch = cv.imread(frames_files_touch[0])
+    rest_frame_touch = cv.imread(frames_files_touch[start_frame+step_size])
     min_frame_sum = np.sum(rest_frame_touch)
-    max_pressure_index = 0
+    max_pressure_index = start_frame+step_size
 
-    start_index = (start_frame + step_size) - step_size//2
+    start_index = start_frame + step_size
     end_index = start_frame + step_size + step_size//2
 
     # Touch frames processing ========================================
@@ -302,6 +302,39 @@ def remove_bg(image, fgbg):
     foreground_mask = fgbg.apply(image, learningRate=0.99)
     return foreground_mask
 
+def compute_similarity(rgb_image, touch_image):
+    """
+    Compute the similarity between the inpainted RGB image and the touch image
+        - Perform an high pass filter on both images
+        - Compute the SSIM between the two images
+    """
+
+    # Perform high pass filter on the images
+    rgb_image = cv.cvtColor(rgb_image, cv.COLOR_BGR2GRAY)
+    touch_image = cv.cvtColor(touch_image, cv.COLOR_BGR2GRAY)
+
+    sobel_x = cv.Sobel(rgb_image, -1, dx=1, dy=0, ksize=5, scale=1,
+                    delta=0, borderType=cv.BORDER_DEFAULT)
+    sobel_y = cv.Sobel(rgb_image, -1, dx=0, dy=1, ksize=5, scale=1,
+                delta=0, borderType=cv.BORDER_DEFAULT)
+    
+    rgb_image = cv.add(sobel_x, sobel_y)
+
+    sobel_x = cv.Sobel(touch_image, -1, dx=1, dy=0, ksize=5, scale=1,
+                    delta=0, borderType=cv.BORDER_DEFAULT)
+    sobel_y = cv.Sobel(touch_image, -1, dx=0, dy=1, ksize=5, scale=1,
+                delta=0, borderType=cv.BORDER_DEFAULT)
+    
+    touch_image = cv.add(sobel_x, sobel_y)
+
+    cv.imshow('RGB high pass', rgb_image)
+    cv.imshow('Touch high pass', touch_image)
+
+    # # Compute the SSIM between the two images
+    # ssim = cv.compare_ssim(rgb_image, touch_image)
+    # print(f"SSIM: {ssim}")
+    
+
 
 def main(args):
 
@@ -333,9 +366,6 @@ def main(args):
         cv.imshow('after motion', after_motion)
         cv.imshow('after motion touch', after_motion_touch)
 
-        if i+step_size == max_pressure_index:
-            print(f"Pressure frame reached: {max_pressure_index}")
-
         flow = compute_optical_flow(curr_frame, next_frame)
         magnitude = compute_magnitude(flow)
 
@@ -355,6 +385,10 @@ def main(args):
         # cv.imshow('inpainted frame double', inpainted_frame_double)
         # cv.imshow('clean motion mask', cleaned_motion_mask)
         # cv.imshow('bitwise mask', bitwise_mask)
+
+        if i+step_size == max_pressure_index:
+            print(f"Pressure frame reached: {max_pressure_index}")
+            compute_similarity(inpainted_frame, after_motion_touch)
 
         # perform inpainting using OpenCV
         image = next_frame
