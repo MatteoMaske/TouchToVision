@@ -4,7 +4,9 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-MAX_MAGNIUDE = 100
+from src.monocularDepth import compute_monocular_depth
+
+MAX_MAGNIUDE = 75
 
 def parse_args():
 	
@@ -65,7 +67,10 @@ def find_best_step_parameters(frames_files_rgb, args):
 
     max_magnitude=0
     best_start=0
-    for i in range(0, len(frames_files_rgb)-best_step_size, best_step_size):
+    max_frame_per_element = 300
+    end_index = min(len(frames_files_rgb)-best_step_size, max_frame_per_element)
+
+    for i in range(0, end_index, best_step_size):
         prev_frame = cv.imread(frames_files_rgb[i])
         next_frame = cv.imread(frames_files_rgb[i+best_step_size])
         H = compute_homography(prev_frame, next_frame)
@@ -80,14 +85,43 @@ def find_best_step_parameters(frames_files_rgb, args):
     print(f"Current best start: {best_start}, magnitude: {max_magnitude}")
 
     # best settings found
-    prev_frame = cv.imread(frames_files_rgb[best_start])
-    next_frame = cv.imread(frames_files_rgb[best_start+best_step_size])
-    warped_frame = warp_frame_sift(prev_frame, next_frame)
-    cv.arrowedLine(warped_frame, (256,256) , (int(tx)+256, int(ty)+256), (0, 255, 0), 1)
-    cv.putText(warped_frame, f"tx:{tx:.2f}, ty:{ty:.2f}, mag:{magnitude:.2f}, frame:{i}", (0, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-    cv.imshow('warped frame', warped_frame)
+    # prev_frame = cv.imread(frames_files_rgb[best_start])
+    # next_frame = cv.imread(frames_files_rgb[best_start+best_step_size])
+    # warped_frame = warp_frame_sift(prev_frame, next_frame)
+    # H = compute_homography(prev_frame, next_frame)
+    # tx, ty = H[0, 2], H[1, 2]
+    # magnitude = np.sqrt(tx**2 + ty**2)
+    # cv.arrowedLine(warped_frame, (256,256) , (int(tx)+256, int(ty)+256), (0, 255, 0), 1)
+    # cv.putText(warped_frame, f"tx:{tx:.2f}, ty:{ty:.2f}, mag:{magnitude:.2f}, frame:{best_start}", (0, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    # cv.imshow('warped frame', warped_frame)
+    # cv.waitKey(0)
 
     return best_start, best_step_size
+
+def find_max_pressure(frames_files_touch, start_frame=0, step_size=50):
+    """
+    Find the frame with the maximum pressure using the sum of the pixel values
+    """
+    rest_frame_touch = cv.imread(frames_files_touch[0])
+    min_frame_sum = np.sum(rest_frame_touch)
+    max_pressure_index = 0
+
+    start_index = (start_frame + step_size) - step_size//2
+    end_index = start_frame + step_size + step_size//2
+
+    # Touch frames processing ========================================
+    for i in range(start_index, end_index):
+        frame_touch = cv.imread(frames_files_touch[i])
+        # cv.imshow(f'frame touch {i}', frame_touch)
+        # cv.waitKey(0)
+        
+        if np.sum(frame_touch) < min_frame_sum:
+            min_frame_sum = np.sum(frame_touch)
+            max_pressure_index = i
+
+    print(f"Max pressure frame: {max_pressure_index}, sum: {min_frame_sum}")
+    return min_frame_sum, max_pressure_index
+
 
 def segment_frame(frame):
     """
@@ -268,9 +302,10 @@ def remove_bg(image, fgbg):
     foreground_mask = fgbg.apply(image, learningRate=0.99)
     return foreground_mask
 
+
 def main(args):
 
-    print("Press 'n' to go to the next frame, press 'p' to show the magnitude, press 'q' to quit")
+    print("Press 'n' to go to the next frame, press 'p' to show the magnitude, 's' to save the frame, press 'q' to quit")
 
     fgbg = cv.createBackgroundSubtractorMOG2(history=100, varThreshold=16, detectShadows=False)
 
@@ -284,21 +319,29 @@ def main(args):
 
     start, step_size = find_best_step_parameters(frames_files_rgb, args)
 
-    for i in range(start, len(frames_files_rgb)):
-        # RGB frames processing ========================================
+    min_frame_sum, max_pressure_index = find_max_pressure(frames_files_touch, start, step_size)
 
-        prev_frame = cv.imread(frames_files_rgb[i])
+    for i in range(start, len(frames_files_rgb)):
+
+        curr_frame = cv.imread(frames_files_rgb[i])
+        curr_frame_touch = cv.imread(frames_files_touch[i])
         next_frame = cv.imread(frames_files_rgb[i+1])
         after_motion = cv.imread(frames_files_rgb[i+step_size])
-        cv.imshow('prev frame', prev_frame)
+        after_motion_touch = cv.imread(frames_files_touch[i+step_size])
+        cv.imshow('curr frame', curr_frame)
+        # cv.imshow('curr frame touch', curr_frame_touch)
         cv.imshow('after motion', after_motion)
+        cv.imshow('after motion touch', after_motion_touch)
 
-        flow = compute_optical_flow(prev_frame, next_frame)
+        if i+step_size == max_pressure_index:
+            print(f"Pressure frame reached: {max_pressure_index}")
+
+        flow = compute_optical_flow(curr_frame, next_frame)
         magnitude = compute_magnitude(flow)
 
         # seg_frame = segment_frame(prev_frame)
 
-        warped_frame = warp_frame_sift(prev_frame, after_motion)
+        warped_frame = warp_frame_sift(curr_frame, after_motion)
 
         motion_mask = create_motion_mask(magnitude, k=args["scaling_factor"])
         cleaned_motion_mask = clean_mask(motion_mask)
@@ -310,7 +353,7 @@ def main(args):
 
         cv.imshow('inpainted frame', inpainted_frame)
         # cv.imshow('inpainted frame double', inpainted_frame_double)
-        cv.imshow('clean motion mask', cleaned_motion_mask)
+        # cv.imshow('clean motion mask', cleaned_motion_mask)
         # cv.imshow('bitwise mask', bitwise_mask)
 
         # perform inpainting using OpenCV
@@ -319,17 +362,6 @@ def main(args):
         output = cv.inpaint(image, mask, args["radius"], args["method"])
 
         # cv.imshow("Output", output)
-
-        # Touch frames processing ========================================
-        frame_touch = cv.imread(frames_files_touch[i])
-        cv.imshow('frame touch', frame_touch)
-        
-        min_pressure = np.inf
-        min_pressure_idx = 0
-        if np.sum(frame_touch) < min_pressure:
-            min_pressure = np.sum(frame_touch)
-            min_pressure_idx = i
-        print(f"Min pressure: {min_pressure}, at frame {min_pressure_idx}")
 
         # press 'n' to go to the next frame, press 'q' to quit
         if cv.waitKey(0) & 0xFF == ord('q'):
@@ -340,6 +372,9 @@ def main(args):
         
         if cv.waitKey(0) & 0xFF == ord('p'):
             show_current_magnitude(magnitude)
+
+        if cv.waitKey(0) & 0xFF == ord('s'):
+            cv.imwrite(f'inpainted{i}.png', inpainted_frame)
 
     cv.destroyAllWindows()
 
