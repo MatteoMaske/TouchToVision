@@ -6,8 +6,6 @@ import matplotlib.pyplot as plt
 
 from src.monocularDepth import compute_monocular_depth
 
-MAX_MAGNIUDE = 75
-
 def parse_args():
 	
     ap = argparse.ArgumentParser()
@@ -21,6 +19,9 @@ def parse_args():
         help="inpainting algorithm to use")
     ap.add_argument("-r", "--radius", type=int, default=3, help="inpainting radius")
     ap.add_argument("-k", "--scaling_factor", type=float, default=2.0, help="scaling factor for motion mask")
+    ap.add_argument("--max-magnitude", type=int, default=75, help="maximum magnitude for the motion mask")
+    ap.add_argument("--sampling-rate", type=int, default=10, help="sampling rate to save the inpaintings")
+    ap.add_argument("--save-dir", type=str, default="inpaintings", help="directory to save the inpaintings")
     
     args = vars(ap.parse_args())
 
@@ -78,7 +79,7 @@ def find_best_step_parameters(frames_files_rgb, args):
             continue
         tx, ty = H[0, 2], H[1, 2]
         magnitude = np.sqrt(tx**2 + ty**2)
-        if magnitude > max_magnitude and magnitude < MAX_MAGNIUDE:
+        if magnitude > max_magnitude and magnitude < args['max_magnitude']:
             max_magnitude = magnitude
             best_start = i
             
@@ -120,7 +121,7 @@ def find_max_pressure(frames_files_touch, start_frame=0, step_size=50):
             max_pressure_index = i
 
     print(f"Max pressure frame: {max_pressure_index}, sum: {min_frame_sum}")
-    return min_frame_sum, max_pressure_index
+    return min_frame_sum, max_pressure_index, rest_frame_touch
 
 
 def segment_frame(frame):
@@ -302,7 +303,7 @@ def remove_bg(image, fgbg):
     foreground_mask = fgbg.apply(image, learningRate=0.99)
     return foreground_mask
 
-def compute_similarity(rgb_image, touch_image):
+def compute_similarity(rgb_image, touch_image, touch_base_image, depth_image):
     """
     Compute the similarity between the inpainted RGB image and the touch image
         - Perform an high pass filter on both images
@@ -311,7 +312,14 @@ def compute_similarity(rgb_image, touch_image):
 
     # Perform high pass filter on the images
     rgb_image = cv.cvtColor(rgb_image, cv.COLOR_BGR2GRAY)
+    # touch_image = cv.subtract(touch_image, touch_base_image)
+    touch_image = cv.subtract(touch_image, touch_base_image)
+    cv.imshow('Touch image', touch_image)
     touch_image = cv.cvtColor(touch_image, cv.COLOR_BGR2GRAY)
+
+    # cut the image in the center
+    rgb_image = rgb_image[256:, 256:]
+    # rgb_image = rgb_image[]
 
     sobel_x = cv.Sobel(rgb_image, -1, dx=1, dy=0, ksize=5, scale=1,
                     delta=0, borderType=cv.BORDER_DEFAULT)
@@ -329,11 +337,24 @@ def compute_similarity(rgb_image, touch_image):
 
     cv.imshow('RGB high pass', rgb_image)
     cv.imshow('Touch high pass', touch_image)
+    cv.imshow('Monocular depth', depth_image)
 
-    # # Compute the SSIM between the two images
-    # ssim = cv.compare_ssim(rgb_image, touch_image)
-    # print(f"SSIM: {ssim}")
-    
+    plt.subplot(1, 3, 1)
+    plt.imshow(rgb_image, cmap='gray')
+    plt.subplot(1, 3, 2)
+    plt.imshow(touch_image, cmap='gray')
+    plt.subplot(1, 3, 3)
+    plt.imshow(depth_image, cmap='gray')
+    plt.show()
+
+def find_coupled_frame(index, step_size, args):
+    """
+    Find the frame that is coupled with the inpainted frame
+    """
+    files = os.listdir(args['save_dir'])
+    last_path = sorted(files)[-1]
+
+    return os.path.join(args['save_dir'], last_path)
 
 
 def main(args):
@@ -352,12 +373,12 @@ def main(args):
 
     start, step_size = find_best_step_parameters(frames_files_rgb, args)
 
-    min_frame_sum, max_pressure_index = find_max_pressure(frames_files_touch, start, step_size)
+    min_frame_sum, max_pressure_index, rest_frame_touch = find_max_pressure(frames_files_touch, start, step_size)
 
     for i in range(start, len(frames_files_rgb)):
 
         curr_frame = cv.imread(frames_files_rgb[i])
-        curr_frame_touch = cv.imread(frames_files_touch[i])
+        # curr_frame_touch = cv.imread(frames_files_touch[i])
         next_frame = cv.imread(frames_files_rgb[i+1])
         after_motion = cv.imread(frames_files_rgb[i+step_size])
         after_motion_touch = cv.imread(frames_files_touch[i+step_size])
@@ -386,9 +407,16 @@ def main(args):
         # cv.imshow('clean motion mask', cleaned_motion_mask)
         # cv.imshow('bitwise mask', bitwise_mask)
 
+        if i % args['sampling_rate'] == 0:
+            os.makedirs(args["save_dir"], exist_ok=True)
+            cv.imwrite(f'{args["save_dir"]}/inpainted{i}-{i+step_size}.png', inpainted_frame)
+
         if i+step_size == max_pressure_index:
             print(f"Pressure frame reached: {max_pressure_index}")
-            compute_similarity(inpainted_frame, after_motion_touch)
+            inpainted_couple = find_coupled_frame(i, step_size, args)
+            cv.imwrite(f'inpainted_max_pressure.png', inpainted_frame)
+            inpainted_depth = compute_monocular_depth(inpainted_couple, "inpainted_max_pressure.png")
+            compute_similarity(inpainted_frame, after_motion_touch, rest_frame_touch, inpainted_depth)
 
         # perform inpainting using OpenCV
         image = next_frame
