@@ -125,6 +125,7 @@ def find_max_pressure(frames_files_touch, start_frame=0, step_size=50):
 
 
 def segment_frame(frame):
+
     """
         Segments the frame to separate the background from the foreground using KNN segmentation
     """
@@ -171,6 +172,39 @@ def compute_optical_flow(prev_frame, next_frame):
     
     flow = cv.calcOpticalFlowFarneback(prev_gray, next_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
     return flow
+
+def create_mask(magnitude, k):
+    # Threshold the magnitude to create a binary mask
+    mean_magnitude = np.mean(magnitude)
+    std_magnitude = np.std(magnitude)
+
+    # Set threshold to mean + k * std, k is a hyperparameter
+    threshold = mean_magnitude + k * std_magnitude
+    # print(f"Threshold: {threshold}")
+
+    mask = np.zeros_like(magnitude, dtype=np.uint8)
+    mask[magnitude > threshold] = 255
+    return mask
+
+def clean_mask(mask):
+    #remove all the white pixels not in the bottom right corner
+
+    cleaned_mask = mask.copy()
+    h, w = cleaned_mask.shape
+    cleaned_mask[:h//2, :] = 0
+    cleaned_mask[:, :w//2] = 0
+
+    return cleaned_mask
+
+def create_motion_mask(prev_frame, next_frame, args):
+
+    flow = compute_optical_flow(prev_frame, next_frame)
+    magnitude = compute_magnitude(flow)
+
+    motion_mask = create_mask(magnitude, k=args["scaling_factor"])
+    cleaned_motion_mask = clean_mask(motion_mask)
+
+    return cleaned_motion_mask
 
 def warp_frame_of(prev_frame, flow):
     """
@@ -269,32 +303,6 @@ def compute_magnitude(flow):
     magnitude, _ = cv.cartToPolar(flow[..., 0], flow[..., 1])
     return magnitude
 
-def create_motion_mask(magnitude, k):
-    # Threshold the magnitude to create a binary mask
-    mean_magnitude = np.mean(magnitude)
-    std_magnitude = np.std(magnitude)
-
-    # Set threshold to mean + k * std, k is a hyperparameter
-    threshold = mean_magnitude + k * std_magnitude
-    # print(f"Threshold: {threshold}")
-
-    mask = np.zeros_like(magnitude, dtype=np.uint8)
-    mask[magnitude > threshold] = 255
-    return mask
-
-def clean_mask(mask):
-    kernel = np.ones((3,3),np.uint8)
-    # cleaned_mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel)
-    # cleaned_mask = cv.morphologyEx(mask, cv.MORPH_OPEN, kernel)
-    cleaned_mask = mask
-
-    #remove all the white pixels not in the bottom right corner
-    h, w = cleaned_mask.shape
-    cleaned_mask[:h//2, :] = 0
-    cleaned_mask[:, :w//2] = 0
-
-    return cleaned_mask
-
 def show_current_magnitude(magnitude):
     plt.imshow(magnitude)
     plt.show()
@@ -303,7 +311,7 @@ def remove_bg(image, fgbg):
     foreground_mask = fgbg.apply(image, learningRate=0.99)
     return foreground_mask
 
-def compute_similarity(rgb_image, touch_image, touch_base_image, depth_image):
+def compute_similarity(rgb_image, touch_image, depth_image):
     """
     Compute the similarity between the inpainted RGB image and the touch image
         - Perform an high pass filter on both images
@@ -312,39 +320,25 @@ def compute_similarity(rgb_image, touch_image, touch_base_image, depth_image):
 
     # Perform high pass filter on the images
     rgb_image = cv.cvtColor(rgb_image, cv.COLOR_BGR2GRAY)
-    # touch_image = cv.subtract(touch_image, touch_base_image)
-    touch_image = cv.subtract(touch_image, touch_base_image)
-    cv.imshow('Touch image', touch_image)
     touch_image = cv.cvtColor(touch_image, cv.COLOR_BGR2GRAY)
+    normalized_image = cv.normalize(touch_image, None, 0, 255, cv.NORM_MINMAX)
+
 
     # cut the image in the center
     rgb_image = rgb_image[256:, 256:]
     # rgb_image = rgb_image[]
 
-    sobel_x = cv.Sobel(rgb_image, -1, dx=1, dy=0, ksize=5, scale=1,
-                    delta=0, borderType=cv.BORDER_DEFAULT)
-    sobel_y = cv.Sobel(rgb_image, -1, dx=0, dy=1, ksize=5, scale=1,
-                delta=0, borderType=cv.BORDER_DEFAULT)
-    
-    rgb_image = cv.add(sobel_x, sobel_y)
+    rgb_edges = cv.Canny(rgb_image,50,150)
+    touch_edges = cv.Canny(touch_image,0,150)
 
-    sobel_x = cv.Sobel(touch_image, -1, dx=1, dy=0, ksize=5, scale=1,
-                    delta=0, borderType=cv.BORDER_DEFAULT)
-    sobel_y = cv.Sobel(touch_image, -1, dx=0, dy=1, ksize=5, scale=1,
-                delta=0, borderType=cv.BORDER_DEFAULT)
-    
-    touch_image = cv.add(sobel_x, sobel_y)
-
-    cv.imshow('RGB high pass', rgb_image)
-    cv.imshow('Touch high pass', touch_image)
-    cv.imshow('Monocular depth', depth_image)
+    cv.imshow('Normalized touch image', normalized_image)
 
     plt.subplot(1, 3, 1)
-    plt.imshow(rgb_image, cmap='gray')
+    plt.imshow(rgb_edges, cmap='gray')
     plt.subplot(1, 3, 2)
-    plt.imshow(touch_image, cmap='gray')
+    plt.imshow(touch_edges, cmap='gray')
     plt.subplot(1, 3, 3)
-    plt.imshow(depth_image, cmap='gray')
+    plt.imshow(depth_image)
     plt.show()
 
 def find_coupled_frame(index, step_size, args):
@@ -356,10 +350,62 @@ def find_coupled_frame(index, step_size, args):
 
     return os.path.join(args['save_dir'], last_path)
 
+def clean_touch_frame(frame, args):
+    """
+    Clean the touch frame by removing the background the black points inpainting them after
+    identifying them using KNN segmentation
+    """
+    # Reshaping the image into a 2D array of pixels and 3 color values (RGB)
+    pixel_vals = frame.reshape((-1,3))
+
+    # Convert to float type
+    pixel_vals = np.float32(pixel_vals)
+
+    # kmeans search until 100 iterations are run or the required accuracy is epsilon = 0.85
+    criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.85)
+    k = 3
+    retval, labels, centers = cv.kmeans(pixel_vals, k, None, criteria, 10, cv.KMEANS_RANDOM_CENTERS)
+
+    # convert data into 8-bit values
+    centers = np.uint8(centers)
+    segmented_data = centers[labels.flatten()]
+
+    # reshape data into the original image dimensions
+    segmented_image = segmented_data.reshape((frame.shape))
+    h, w, _ = segmented_image.shape
+    mask = np.zeros_like(segmented_image, dtype=np.uint8)
+
+    # find the black points
+    mask[segmented_image == centers[0]] = 255
+    mask = mask[:, :, 0]
+
+    # Perform morphological operations to refine the mask
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE,(5,5))
+
+    # Dilate the mask to ensure the dots are fully covered
+    refined_mask = cv.dilate(mask, kernel, iterations=2)
+
+    # cv.imshow('original touch image', frame)
+    # cv.imshow('segmented touch image', segmented_image)
+    # cv.imshow('refined mask', refined_mask)
+
+    refined_output = cv.inpaint(frame, refined_mask, args["radius"], args["method"])
+
+    return refined_output
+
+def crop_frame(prev_frame, next_frame, inpainted_frame, args):
+    """
+    Crop the inpainted frame to the touch frame dimensions
+    """
+    motion_mask = create_motion_mask(prev_frame, next_frame, args)
+    cv.imshow('motion 2 mask', motion_mask)
+    cv.waitKey(0)
+
+    return inpainted_frame
 
 def main(args):
 
-    print("Press 'n' to go to the next frame, press 'p' to show the magnitude, 's' to save the frame, press 'q' to quit")
+    print("Press 'n' to go to the next frame, 's' to save the frame, press 'q' to quit")
 
     fgbg = cv.createBackgroundSubtractorMOG2(history=100, varThreshold=16, detectShadows=False)
 
@@ -375,37 +421,28 @@ def main(args):
 
     min_frame_sum, max_pressure_index, rest_frame_touch = find_max_pressure(frames_files_touch, start, step_size)
 
-    for i in range(start, len(frames_files_rgb)):
+    for i in range(max_pressure_index-step_size, len(frames_files_rgb)):
 
-        curr_frame = cv.imread(frames_files_rgb[i])
-        # curr_frame_touch = cv.imread(frames_files_touch[i])
+        prev_frame = cv.imread(frames_files_rgb[i])
         next_frame = cv.imread(frames_files_rgb[i+1])
+
+        prev_after_motion = cv.imread(frames_files_rgb[i+step_size-1])
         after_motion = cv.imread(frames_files_rgb[i+step_size])
         after_motion_touch = cv.imread(frames_files_touch[i+step_size])
-        cv.imshow('curr frame', curr_frame)
-        # cv.imshow('curr frame touch', curr_frame_touch)
-        cv.imshow('after motion', after_motion)
-        cv.imshow('after motion touch', after_motion_touch)
 
-        flow = compute_optical_flow(curr_frame, next_frame)
-        magnitude = compute_magnitude(flow)
-
-        # seg_frame = segment_frame(prev_frame)
-
-        warped_frame = warp_frame_sift(curr_frame, after_motion)
-
-        motion_mask = create_motion_mask(magnitude, k=args["scaling_factor"])
-        cleaned_motion_mask = clean_mask(motion_mask)
+        motion_mask = create_motion_mask(prev_frame, next_frame, args)
 
         bg_mask = remove_bg(next_frame, fgbg)
-        bitwise_mask = cv.bitwise_and(cleaned_motion_mask, bg_mask)
+        bitwise_mask = cv.bitwise_and(motion_mask, bg_mask)
 
-        inpainted_frame, inpainted_frame_double = blend_frames(after_motion, warped_frame, cleaned_motion_mask)
+        warped_frame = warp_frame_sift(prev_frame, after_motion)
+
+        inpainted_frame, inpainted_frame_double = blend_frames(after_motion, warped_frame, motion_mask)
 
         cv.imshow('inpainted frame', inpainted_frame)
         # cv.imshow('inpainted frame double', inpainted_frame_double)
-        # cv.imshow('clean motion mask', cleaned_motion_mask)
-        # cv.imshow('bitwise mask', bitwise_mask)
+        cv.imshow('motion mask', motion_mask)
+        cv.imshow('bitwise mask', bitwise_mask)
 
         if i % args['sampling_rate'] == 0:
             os.makedirs(args["save_dir"], exist_ok=True)
@@ -413,27 +450,26 @@ def main(args):
 
         if i+step_size == max_pressure_index:
             print(f"Pressure frame reached: {max_pressure_index}")
-            inpainted_couple = find_coupled_frame(i, step_size, args)
             cv.imwrite(f'inpainted_max_pressure.png', inpainted_frame)
-            inpainted_depth = compute_monocular_depth(inpainted_couple, "inpainted_max_pressure.png")
-            compute_similarity(inpainted_frame, after_motion_touch, rest_frame_touch, inpainted_depth)
+            after_motion_touch = clean_touch_frame(after_motion_touch, args)
+            inpainted_frame = crop_frame(prev_after_motion, after_motion_touch, inpainted_frame, args)
+            inpainted_couple = find_coupled_frame(i, step_size, args)
+            inpainted_depth = compute_monocular_depth( "inpainted_max_pressure.png",inpainted_couple)
+            compute_similarity(inpainted_frame, after_motion_touch, inpainted_depth)
 
         # perform inpainting using OpenCV
         image = next_frame
-        mask = cleaned_motion_mask
+        mask = motion_mask
         output = cv.inpaint(image, mask, args["radius"], args["method"])
 
         # cv.imshow("Output", output)
 
-        # press 'n' to go to the next frame, press 'q' to quit
+        # press 'n' to go to the next frame, press 's' to save the frame, press 'q' to quit
         if cv.waitKey(0) & 0xFF == ord('q'):
             break
         
         if cv.waitKey(0) & 0xFF == ord('n'):
             continue
-        
-        if cv.waitKey(0) & 0xFF == ord('p'):
-            show_current_magnitude(magnitude)
 
         if cv.waitKey(0) & 0xFF == ord('s'):
             cv.imwrite(f'inpainted{i}.png', inpainted_frame)

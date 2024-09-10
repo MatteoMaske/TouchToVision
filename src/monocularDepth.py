@@ -122,7 +122,9 @@ def compute_monocular_depth(image1_path, image2_path):
 
     disparity_map, filtered_disparity_map = compute_disparity_map(img1, img2_warped, img_inliner_matches)
 
-    display_results(img1, img2_warped, img_inliner_matches, disparity_map, filtered_disparity_map)
+    # display_results(img1, img2_warped, img_inliner_matches, disparity_map, filtered_disparity_map)
+
+    return filtered_disparity_map
 
 if __name__ == "__main__":
     image1_path = 'inpainted123.png'
