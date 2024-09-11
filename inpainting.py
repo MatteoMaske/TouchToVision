@@ -1,6 +1,6 @@
 import argparse
 import cv2 as cv
-import os
+import os, shutil
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -11,7 +11,7 @@ def parse_args():
     ap = argparse.ArgumentParser()
     # ap.add_argument("-s", "--starting_frame", type=int, default=140)
     ap.add_argument("--step_size", type=int, default=20)
-    ap.add_argument("-i", "--image", type=str, default="rock",
+    ap.add_argument("-i", "--image", type=str, default="grass",
                     choices=['grass', 'rock', 'tree', 'rock2'],
                     help="frames to inpaint")
     ap.add_argument("-a", "--method", type=str, default="telea",
@@ -311,35 +311,132 @@ def remove_bg(image, fgbg):
     foreground_mask = fgbg.apply(image, learningRate=0.99)
     return foreground_mask
 
+def auto_canny_median(image, sigma=0.33):
+    # Compute the median of the pixel intensities
+    median_val = np.median(image)
+    
+    # Set the lower and upper thresholds based on the median
+    lower = int(max(0, (1.0 - sigma) * median_val))
+    upper = int(min(255, (1.0 + sigma) * median_val))
+    
+    # Apply Canny Edge Detection
+    edges = cv.Canny(image, lower, upper)
+    return edges
+
+def auto_canny(image, sigma=0.33):
+
+    otsu_threshold, _ = cv.threshold(image, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
+
+    lower = int((1-sigma) * otsu_threshold)
+    upper = int((1+sigma) * otsu_threshold)
+
+    edges = cv.Canny(image, lower, upper)
+    return edges
+
+def find_matching_keypoints(visual_image, touch_image):
+    # Initialize SIFT detector
+    sift = cv.SIFT_create()
+
+    # Detect keypoints and compute descriptors for both images
+    keypoints_1, descriptors_1 = sift.detectAndCompute(visual_image, None)
+    keypoints_2, descriptors_2 = sift.detectAndCompute(touch_image, None)
+
+    # Visualize the keypoints
+    image1_keypoints = cv.drawKeypoints(visual_image, keypoints_1, None)
+    image2_keypoints = cv.drawKeypoints(touch_image, keypoints_2, None)
+
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.imshow(image1_keypoints)
+    plt.title('Image 1 Keypoints')
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(image2_keypoints)
+    plt.title('Image 2 Keypoints')
+    plt.show()
+
+    # FLANN parameters
+    FLANN_INDEX_KDTREE = 1
+    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+    search_params = dict(checks=50)  # Specify the number of checks
+
+    # Initialize the FLANN-based matcher
+    flann = cv.FlannBasedMatcher(index_params, search_params)
+
+    # Perform KNN matching (find the 2 nearest neighbors)
+    matches = flann.knnMatch(descriptors_1, descriptors_2, k=2)
+
+    # Apply Lowe's ratio test to filter good matches
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.7 * n.distance:  # Lowe's ratio test
+            good_matches.append(m)
+
+    # Draw the matches
+    matched_image = cv.drawMatches(visual_image, keypoints_1, touch_image, keypoints_2, good_matches, None, flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+
+    plt.figure(figsize=(12, 6))
+    plt.imshow(matched_image)
+    plt.title('Top 50 Matches')
+    plt.show()
+
+
 def compute_similarity(rgb_image, touch_image, depth_image):
     """
     Compute the similarity between the inpainted RGB image and the touch image
-        - Perform an high pass filter on both images
-        - Compute the SSIM between the two images
+        - Perform high pass filter on the images
+        - Compute the edges using Canny edge detector
+        - Compute the similarity between the two images using SIFT descriptors
     """
 
     # Perform high pass filter on the images
     rgb_image = cv.cvtColor(rgb_image, cv.COLOR_BGR2GRAY)
     touch_image = cv.cvtColor(touch_image, cv.COLOR_BGR2GRAY)
-    normalized_image = cv.normalize(touch_image, None, 0, 255, cv.NORM_MINMAX)
+
+    # cut the rgb image in the center
+    rgb_image_crop = rgb_image[200:, 300:]
+
+    # Sharp the touch image using a high pass filter
+    clahe = cv.createCLAHE(clipLimit=8, tileGridSize=(4,4))
+    touch_image_enhanced = clahe.apply(touch_image)
+
+    # rgb_edges = cv.Canny(rgb_image,0,150)
+    # touch_edges = cv.Canny(touch_image_enhanced,0, 150)
+
+    rgb_edges_median = auto_canny_median(rgb_image_crop)
+    touch_edges_median = auto_canny_median(touch_image_enhanced)
+
+    rgb_edges = auto_canny(rgb_image_crop)
+    touch_edges = auto_canny(touch_image_enhanced)
 
 
-    # cut the image in the center
-    rgb_image = rgb_image[256:, 256:]
-    # rgb_image = rgb_image[]
-
-    rgb_edges = cv.Canny(rgb_image,50,150)
-    touch_edges = cv.Canny(touch_image,0,150)
-
-    cv.imshow('Normalized touch image', normalized_image)
-
-    plt.subplot(1, 3, 1)
+    plt.subplot(2,4,1)
+    plt.imshow(rgb_image, cmap='gray')
+    plt.title('RGB Image')
+    plt.subplot(2,4,2)
+    plt.imshow(rgb_image_crop, cmap='gray')
+    plt.title('RGB Image Crop')
+    plt.subplot(2,4,3)
+    plt.imshow(touch_image, cmap='gray')
+    plt.title('Touch Image')
+    plt.subplot(2,4,4)
+    plt.imshow(touch_image_enhanced, cmap='gray')
+    plt.title('Touch Image Enhanced')
+    plt.subplot(2,4,5)
     plt.imshow(rgb_edges, cmap='gray')
-    plt.subplot(1, 3, 2)
+    plt.title('RGB Edges')
+    plt.subplot(2,4,6)
+    plt.imshow(rgb_edges_median, cmap='gray')
+    plt.title('RGB Edges Median')
+    plt.subplot(2,4,7)
     plt.imshow(touch_edges, cmap='gray')
-    plt.subplot(1, 3, 3)
-    plt.imshow(depth_image)
+    plt.title('Touch Edges')
+    plt.subplot(2,4,8)
+    plt.imshow(touch_edges_median, cmap='gray')
+    plt.title('Touch Edges Median')
     plt.show()
+
+    find_matching_keypoints(rgb_edges, touch_edges)
 
 def find_coupled_frame(index, step_size, args):
     """
@@ -376,7 +473,8 @@ def clean_touch_frame(frame, args):
     mask = np.zeros_like(segmented_image, dtype=np.uint8)
 
     # find the black points
-    mask[segmented_image == centers[0]] = 255
+    darkest_centroid = np.min(centers,axis=0)
+    mask[segmented_image == darkest_centroid] = 255
     mask = mask[:, :, 0]
 
     # Perform morphological operations to refine the mask
@@ -384,10 +482,6 @@ def clean_touch_frame(frame, args):
 
     # Dilate the mask to ensure the dots are fully covered
     refined_mask = cv.dilate(mask, kernel, iterations=2)
-
-    # cv.imshow('original touch image', frame)
-    # cv.imshow('segmented touch image', segmented_image)
-    # cv.imshow('refined mask', refined_mask)
 
     refined_output = cv.inpaint(frame, refined_mask, args["radius"], args["method"])
 
@@ -421,7 +515,7 @@ def main(args):
 
     min_frame_sum, max_pressure_index, rest_frame_touch = find_max_pressure(frames_files_touch, start, step_size)
 
-    for i in range(max_pressure_index-step_size, len(frames_files_rgb)):
+    for i in range(start, len(frames_files_rgb)-step_size):
 
         prev_frame = cv.imread(frames_files_rgb[i])
         next_frame = cv.imread(frames_files_rgb[i+1])
@@ -429,6 +523,10 @@ def main(args):
         prev_after_motion = cv.imread(frames_files_rgb[i+step_size-1])
         after_motion = cv.imread(frames_files_rgb[i+step_size])
         after_motion_touch = cv.imread(frames_files_touch[i+step_size])
+
+        cv.imshow("prev frame", prev_frame)
+        cv.imshow("after motion", after_motion)
+        cv.imshow('after motion touch', after_motion_touch)
 
         motion_mask = create_motion_mask(prev_frame, next_frame, args)
 
@@ -440,9 +538,6 @@ def main(args):
         inpainted_frame, inpainted_frame_double = blend_frames(after_motion, warped_frame, motion_mask)
 
         cv.imshow('inpainted frame', inpainted_frame)
-        # cv.imshow('inpainted frame double', inpainted_frame_double)
-        cv.imshow('motion mask', motion_mask)
-        cv.imshow('bitwise mask', bitwise_mask)
 
         if i % args['sampling_rate'] == 0:
             os.makedirs(args["save_dir"], exist_ok=True)
@@ -452,10 +547,11 @@ def main(args):
             print(f"Pressure frame reached: {max_pressure_index}")
             cv.imwrite(f'inpainted_max_pressure.png', inpainted_frame)
             after_motion_touch = clean_touch_frame(after_motion_touch, args)
-            inpainted_frame = crop_frame(prev_after_motion, after_motion_touch, inpainted_frame, args)
+            # inpainted_frame = crop_frame(prev_after_motion, after_motion_touch, inpainted_frame, args)
             inpainted_couple = find_coupled_frame(i, step_size, args)
-            inpainted_depth = compute_monocular_depth( "inpainted_max_pressure.png",inpainted_couple)
-            compute_similarity(inpainted_frame, after_motion_touch, inpainted_depth)
+            # inpainted_depth = compute_monocular_depth( "inpainted_max_pressure.png",inpainted_couple)
+            compute_similarity(inpainted_frame, after_motion_touch, None)
+            max_pressure_index, _ = find_max_pressure(frames_files_touch, i+1, step_size)
 
         # perform inpainting using OpenCV
         image = next_frame
@@ -466,6 +562,7 @@ def main(args):
 
         # press 'n' to go to the next frame, press 's' to save the frame, press 'q' to quit
         if cv.waitKey(0) & 0xFF == ord('q'):
+            shutil.rmtree(args["save_dir"])
             break
         
         if cv.waitKey(0) & 0xFF == ord('n'):
