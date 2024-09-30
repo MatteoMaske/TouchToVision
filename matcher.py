@@ -157,20 +157,19 @@ def compare_classes(args, sr_model):
     target_classes.remove(_class)
 
     # Source Visual vs Target Touch
-    # for target_class in target_classes:
-    #     target_samples = len(os.listdir(os.path.join(base_dir, target_class, gelsight_dir)))
+    visual_crops = generate_crops(visual_image)
+    for target_class in target_classes:
+        target_samples = len(os.listdir(os.path.join(base_dir, target_class, gelsight_dir)))
 
-    #     for target_index in range(target_samples):
-    #         target_touch_sample = os.path.join(base_dir, target_class, gelsight_dir, f'touch_image_{target_index:03d}.png')
-    #         target_touch_image = cv.imread(target_touch_sample, cv.IMREAD_GRAYSCALE)
-    #         visual_crops = generate_crops(visual_image)
-    #         best_matches = compute_best_matches(visual_crops, target_touch_image)
-    #         best_matches_avg = sum(best_matches) / len(best_matches)
-    #         print(f"Best matches for Visual:{_class} vs Touch:{target_class}_{target_index}: {best_matches_avg}")
-    #     best_matches = compute_best_matches(visual_crops)
-    #     best_matches_avg = sum(best_matches) / len(best_matches)
-    #     print(f"Best matches for {_class} vs {_class}: {best_matches_avg}")
-
+        for target_index in range(target_samples):
+            target_touch_sample = os.path.join(base_dir, target_class, gelsight_dir, f'touch_image_{target_index:03d}.png')
+            target_touch_image = cv.imread(target_touch_sample, cv.IMREAD_GRAYSCALE)
+            best_matches = compute_best_matches(visual_crops, target_touch_image)
+            best_matches_avg = sum(best_matches) / len(best_matches)
+            print(f"Best matches for Visual:{_class} vs Touch:{target_class}_{target_index}: {best_matches_avg}")
+    best_matches = compute_best_matches(visual_crops, touch_image)
+    best_matches_avg = sum(best_matches) / len(best_matches)
+    print(f"Best matches for {_class} vs {_class}: {best_matches_avg}")
 
     # Source Touch vs Target Visual
     for target_class in target_classes:
