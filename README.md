@@ -1,6 +1,8 @@
 # TouchToVision
 TouchToVision project for the Computer Vision course 2023/24
 
+<img src="report/matcher_7.png" width="100%">
+
 ## Description
 The project is about the development of a system which able to pair a visual frame with a tactile frame. The dataset used for the project is a subset of the original [TouchAndGo](https://github.com/fredfyyang/Touch-and-Go) dataset. The proposed pipeline is able to extract from the visual video and tactile video the most relevant frames and then pair them. 
 
