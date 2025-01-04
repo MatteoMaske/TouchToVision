@@ -58,6 +58,9 @@ def find_matching_keypoints(visual_image, touch_image, show_keypoints=False):
 
 
 def compute_similarity_metric(keypoints_1, keypoints_2, good_matches):
+
+    #Basic metrics to compute similarity
+    # return 100 * len(good_matches) / min(len(keypoints_1), len(keypoints_2))
     # 1. Number of good matches
     num_good_matches = len(good_matches)
     
@@ -69,19 +72,9 @@ def compute_similarity_metric(keypoints_1, keypoints_2, good_matches):
     # 3. Ratio of keypoints matched (normalized by the number of keypoints in both images)
     ratio_matched_1 = num_good_matches / len(keypoints_1)
     ratio_matched_2 = num_good_matches / len(keypoints_2)
-
-    # 4. Geometric consistency: Calculate homography between the matched points
-    if num_good_matches >= 4:  # Need at least 4 matches for homography
-        src_pts = np.float32([keypoints_1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([keypoints_2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        H, mask = cv.findHomography(src_pts, dst_pts, cv.RANSAC, 5.0)
-        # Use the number of inliers as a measure of geometric consistency
-        num_inliers = np.sum(mask)
-    else:
-        num_inliers = 0
     
     # Final similarity score: A combination of the different metrics
-    similarity_score = (num_good_matches * 10 / avg_distance) + (ratio_matched_1 + ratio_matched_2) * 10 + num_inliers
+    similarity_score = (num_good_matches * 10 / avg_distance) + (ratio_matched_1 + ratio_matched_2) * 10
 
     return similarity_score
 
@@ -116,13 +109,13 @@ def generate_crops(image):
             # cv.rectangle(tmp, (j, i), (j+crop_size, i+crop_size), (0, 0, 0), 3)
             # cv.imshow('Crops', tmp)
             # cv.waitKey(0)
-    print(f"{len(crops)} crops generated")
+    # print(f"{len(crops)} crops generated")
     return crops
 
 def compute_best_matches(visual_crops, touch_image, k=5):
     similarities = []
     for visual_crop in visual_crops:
-        similarity_score = compare_images(visual_crop, touch_image)
+        similarity_score = compare_images(visual_crop, touch_image, show_keypoints=False)
         similarities.append(similarity_score)
     #return top-3 similarities
     assert k <= len(similarities), "k should be less than or equal to the number of similarities"
@@ -153,27 +146,34 @@ def compare_classes(args, sr_model):
     visual_image = cv.imread(visual_sample, cv.IMREAD_GRAYSCALE)
     touch_image = cv.imread(touch_sample, cv.IMREAD_GRAYSCALE)
 
-    target_classes = ["rock", "grass", "tree"]
+    target_classes = ["rock", "grass", "tree", "rock2"]
     target_classes.remove(_class)
 
     # Source Visual vs Target Touch
     visual_crops = generate_crops(visual_image)
     for target_class in target_classes:
         target_samples = len(os.listdir(os.path.join(base_dir, target_class, gelsight_dir)))
-
+        target_results = []
         for target_index in range(target_samples):
             target_touch_sample = os.path.join(base_dir, target_class, gelsight_dir, f'touch_image_{target_index:03d}.png')
             target_touch_image = cv.imread(target_touch_sample, cv.IMREAD_GRAYSCALE)
             best_matches = compute_best_matches(visual_crops, target_touch_image)
             best_matches_avg = sum(best_matches) / len(best_matches)
-            print(f"Best matches for Visual:{_class} vs Touch:{target_class}_{target_index}: {best_matches_avg}")
+            # best_matches_avg = compare_images(visual_image, target_touch_image, show_keypoints=False)
+            target_results.append(best_matches_avg)
+            # print(f"Best matches for Visual:{_class} vs Touch:{target_class}_{target_index}: {best_matches_avg}")
+        results_mean, results_std = np.mean(target_results), np.std(target_results)
+        print(f"Best matches for touch:{_class} vs visual:{target_class}: {results_mean:.5f} +/- {results_std:.5f}")
+    
     best_matches = compute_best_matches(visual_crops, touch_image)
     best_matches_avg = sum(best_matches) / len(best_matches)
+    # best_matches_avg = compare_images(visual_image, touch_image, show_keypoints=False)
     print(f"Best matches for {_class} vs {_class}: {best_matches_avg}")
 
     # Source Touch vs Target Visual
     for target_class in target_classes:
         target_samples = len(os.listdir(os.path.join(base_dir, target_class, video_dir)))//2
+        target_results = []
         for target_index in range(target_samples):
             if not os.path.exists(os.path.join(base_dir, target_class, video_dir,  f'rgb_image_{target_index:03d}_hd.png')):
                 super_resolve_image(os.path.join(base_dir, target_class, video_dir, f'rgb_image_{target_index:03d}.png'), sr_model)
@@ -184,7 +184,9 @@ def compare_classes(args, sr_model):
 
             best_matches = compute_best_matches(target_visual_samples, touch_image)
             best_matches_avg = sum(best_matches) / len(best_matches)
-            print(f"Best matches for touch:{_class} vs visual:{target_class}_{target_index}: {best_matches_avg}")
+            target_results.append(best_matches_avg)
+        results_mean, results_std = np.mean(target_results), np.std(target_results)
+        print(f"Best matches for touch:{_class} vs visual:{target_class}: {results_mean:.5f} +/- {results_std:.5f}")
     
     visual_samples = generate_crops(visual_image)
     best_matches = compute_best_matches(visual_samples, touch_image)

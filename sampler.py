@@ -375,11 +375,6 @@ def main(args):
         after_motion = cv.imread(frames_files_rgb[i+step_size])
         after_motion_touch = cv.imread(frames_files_touch[i+step_size])
 
-        cv.imshow("prev frame", prev_frame)
-        cv.imshow("after motion", after_motion)
-        # cv.imshow("prev after motion", prev_after_motion)
-        # cv.imshow('after motion touch', after_motion_touch)
-
         motion_mask = create_motion_mask(prev_frame, next_frame, args)
 
         bg_mask = remove_bg(next_frame, fgbg)
@@ -392,7 +387,13 @@ def main(args):
 
         inpainted_frame, inpainted_frame_double = blend_frames(after_motion, warped_frame, motion_mask)
 
-        # cv.imshow('inpainted frame', inpainted_frame)
+        # cv.imshow('motion mask', motion_mask)
+        cv.imshow('inpainted frame', inpainted_frame)
+
+        prev_frame_1 = cv.cvtColor(prev_frame, cv.COLOR_BGR2RGB)
+        after_motion_1 = cv.cvtColor(after_motion, cv.COLOR_BGR2RGB)
+        motion_mask_1 = cv.cvtColor(motion_mask, cv.COLOR_BGR2RGB)
+        inpainted_frame_1 = cv.cvtColor(inpainted_frame, cv.COLOR_BGR2RGB)
 
         if i % args['sampling_rate'] == 0:
             os.makedirs(args["save_dir"], exist_ok=True)
@@ -425,6 +426,23 @@ def main(args):
 
         if cv.waitKey(0) & 0xFF == ord('s'):
             cv.imwrite(f'inpainted{i}.png', inpainted_frame)
+            plt.subplot(2, 2, 1)
+            plt.axis('off')
+            plt.imshow(prev_frame_1)
+            plt.title('Previous Frame')
+            plt.subplot(2, 2, 2)
+            plt.axis('off')
+            plt.imshow(after_motion_1)
+            plt.title('After Motion Frame')
+            plt.subplot(2, 2, 3)
+            plt.axis('off')
+            plt.imshow(motion_mask_1)
+            plt.title('Motion Mask')
+            plt.subplot(2, 2, 4)
+            plt.axis('off')
+            plt.imshow(inpainted_frame_1)
+            plt.title('Inpainted Frame')
+            plt.show()
 
     cv.destroyAllWindows()
 
